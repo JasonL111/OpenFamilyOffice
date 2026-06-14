@@ -1,0 +1,295 @@
+// Family Office data model.
+//
+// Design notes (read before extending):
+//  * Everything is scoped to a Household (the family). Even though a self-hosted
+//    install usually serves ONE family, scoping by household keeps queries clean
+//    and leaves the door open to multi-family later.
+//  * Money/assets are attributed to an OWNER that is either a Member (a person)
+//    or an Entity (trust / company / foundation). The Entity module isn't built
+//    in v1, but the model already supports it so you never have to migrate later.
+//  * Net-worth-over-time is driven by Valuation snapshots; portfolio performance
+//    is driven by Transactions + Price history. Keep both.
+//  * Every state-changing action should write an AuditLog row.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Tenancy & people ──────────────────────────────────────────
+
+model Household {
+  id           String   @id @default(cuid())
+  name         String
+  baseCurrency String   @default("USD")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users     User[]
+  members   Member[]
+  entities  Entity[]
+  accounts  Account[]
+  documents Document[]
+  auditLogs AuditLog[]
+}
+
+model User {
+  id           String     @id @default(cuid())
+  householdId  String
+  household    Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  email        String     @unique
+  passwordHash String?    // null when the user authenticates via OIDC/SSO
+  oidcSubject  String?    @unique // reserved for future SSO; unused in v1
+  role         Role       @default(VIEWER)
+  status       UserStatus @default(ACTIVE)
+  member       Member?    @relation(fields: [memberId], references: [id])
+  memberId     String?    @unique
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  auditLogs AuditLog[]
+}
+
+enum Role {
+  OWNER   // principal / head of the family
+  ADMIN   // family office manager
+  ADVISOR // external advisor, lawyer, accountant
+  MEMBER  // family member
+  VIEWER  // read-only
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+// A person in the family. May or may not have a login (User) account.
+model Member {
+  id            String    @id @default(cuid())
+  householdId   String
+  household     Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  fullName      String
+  relation      String?   // e.g. "spouse", "child", "advisor"
+  email         String?
+  dateOfBirth   DateTime?
+  notes         String?
+  user          User?
+  ownedAccounts Account[] @relation("MemberAccounts")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// Legal structures. Module not built in v1, but assets can already be
+// attributed to an entity so you never need a painful migration later.
+model Entity {
+  id            String     @id @default(cuid())
+  householdId   String
+  household     Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  name          String
+  type          EntityType
+  jurisdiction  String?
+  notes         String?
+  ownedAccounts Account[]  @relation("EntityAccounts")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+enum EntityType {
+  PERSONAL
+  TRUST
+  COMPANY
+  FOUNDATION
+  PARTNERSHIP
+}
+
+// ── Accounts, holdings, valuations ────────────────────────────
+
+model Account {
+  id          String      @id @default(cuid())
+  householdId String
+  household   Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  name        String
+  type        AccountType
+  currency    String      @default("USD")
+  institution String?
+
+  // Ownership: exactly one of member / entity.
+  ownerMember   Member? @relation("MemberAccounts", fields: [ownerMemberId], references: [id])
+  ownerMemberId String?
+  ownerEntity   Entity? @relation("EntityAccounts", fields: [ownerEntityId], references: [id])
+  ownerEntityId String?
+
+  holdings     Holding[]
+  transactions Transaction[]
+  valuations   Valuation[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([householdId])
+}
+
+enum AccountType {
+  CASH
+  BANK
+  BROKERAGE
+  RETIREMENT
+  CRYPTO
+  REAL_ESTATE
+  PRIVATE_EQUITY
+  LOAN // liability (value stored negative or flagged in reporting)
+  OTHER
+}
+
+// A tradable/holdable instrument shared as a price reference.
+model Instrument {
+  id         String     @id @default(cuid())
+  symbol     String?
+  name       String
+  assetClass AssetClass
+  currency   String     @default("USD")
+  holdings   Holding[]
+  prices     Price[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([symbol, assetClass])
+}
+
+enum AssetClass {
+  EQUITY
+  FIXED_INCOME
+  FUND
+  CASH
+  CRYPTO
+  REAL_ESTATE
+  PRIVATE
+  COMMODITY
+  OTHER
+}
+
+// A position held within an account.
+model Holding {
+  id           String     @id @default(cuid())
+  accountId    String
+  account      Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id])
+  quantity     Decimal    @db.Decimal(28, 8)
+  costBasis    Decimal?   @db.Decimal(28, 2)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([accountId])
+}
+
+model Transaction {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type      TxType
+  tradeDate DateTime
+  symbol    String?
+  quantity  Decimal? @db.Decimal(28, 8)
+  price     Decimal? @db.Decimal(28, 8)
+  amount    Decimal  @db.Decimal(28, 2) // signed cash impact
+  currency  String   @default("USD")
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([accountId, tradeDate])
+}
+
+enum TxType {
+  BUY
+  SELL
+  DIVIDEND
+  INTEREST
+  DEPOSIT
+  WITHDRAWAL
+  FEE
+  TRANSFER
+}
+
+// Manual or imported price points (drive performance + net-worth history).
+model Price {
+  id           String     @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  date         DateTime
+  close        Decimal    @db.Decimal(28, 8)
+
+  @@unique([instrumentId, date])
+}
+
+// Point-in-time account value snapshot (drives net-worth-over-time charts).
+model Valuation {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date      DateTime
+  value     Decimal  @db.Decimal(28, 2)
+  currency  String   @default("USD")
+
+  @@unique([accountId, date])
+}
+
+// ── Document vault ────────────────────────────────────────────
+
+model Document {
+  id          String      @id @default(cuid())
+  householdId String
+  household   Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  title       String
+  category    DocCategory @default(OTHER)
+
+  // The file lives on disk / object storage; we keep metadata + a pointer.
+  storageKey String
+  mimeType   String
+  sizeBytes  Int
+
+  // Optional links to what the document concerns.
+  relatedMemberId  String?
+  relatedEntityId  String?
+  relatedAccountId String?
+  uploadedById     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([householdId, category])
+}
+
+enum DocCategory {
+  LEGAL
+  TAX
+  INSURANCE
+  ESTATE // wills, succession planning
+  STATEMENT
+  CONTRACT
+  IDENTITY
+  OTHER
+}
+
+// ── Audit ─────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  householdId String
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id])
+  userId      String?
+  action      String    // e.g. "account.create", "document.download"
+  targetType  String?
+  targetId    String?
+  ip          String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([householdId, createdAt])
+}

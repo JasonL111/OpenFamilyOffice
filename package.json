@@ -1,0 +1,14 @@
+{
+  "name": "family-office",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted family office platform",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/* dev",
+    "build": "pnpm -r build",
+    "db:generate": "pnpm --filter @fo/api db:generate",
+    "db:migrate": "pnpm --filter @fo/api db:migrate",
+    "db:seed": "pnpm --filter @fo/api db:seed"
+  }
+}
