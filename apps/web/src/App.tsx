@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Accounts from "./pages/Accounts";
 import Portfolio from "./pages/Portfolio";
@@ -20,6 +21,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
           <Route element={<Protected><Layout /></Protected>}>
             <Route index element={<Dashboard />} />
             <Route path="accounts" element={<Accounts />} />

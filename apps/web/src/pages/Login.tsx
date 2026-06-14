@@ -26,6 +26,9 @@ export default function Login() {
       <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
       {error && <div style={{ color: "var(--neg)" }}>{error}</div>}
       <button onClick={submit}>Sign in</button>
+      <p style={{ color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
+        Don't have an account? <a href="/register">Register</a>
+      </p>
     </div>
   );
 }

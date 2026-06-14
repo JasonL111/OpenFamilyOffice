@@ -29,12 +29,13 @@ model Household {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  users     User[]
-  members   Member[]
-  entities  Entity[]
-  accounts  Account[]
-  documents Document[]
-  auditLogs AuditLog[]
+  users        User[]
+  inviteTokens InviteToken[]
+  members     Member[]
+  entities    Entity[]
+  accounts    Account[]
+  documents   Document[]
+  auditLogs   AuditLog[]
 }
 
 model User {
@@ -52,7 +53,8 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  auditLogs AuditLog[]
+  auditLogs    AuditLog[]
+  inviteTokens InviteToken[]
 }
 
 enum Role {
@@ -67,6 +69,23 @@ enum UserStatus {
   ACTIVE
   INVITED
   SUSPENDED
+}
+
+model InviteToken {
+  id          String     @id @default(cuid())
+  token       String     @unique
+  householdId String
+  household   Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  role        Role       @default(MEMBER)
+  email       String?    // if set, only this email may use the token
+  createdById String
+  createdBy   User       @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  usedAt      DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime   @default(now())
+
+  @@index([token])
+  @@index([householdId])
 }
 
 // A person in the family. May or may not have a login (User) account.
